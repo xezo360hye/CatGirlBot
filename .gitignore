@@ -1,4 +1,10 @@
-.env
+# These are for virtualenv
 bin/
 lib/
 pyvenv.cfg
+
+# When importing as module Python creates this dir
+__pycache__/
+
+# There is my token so I will not share the config
+config.yaml
