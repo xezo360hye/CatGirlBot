@@ -28,41 +28,22 @@ class CatGirlBot():
         self.longpoll = longpoll
         self.uploader = uploader
         self.users = {}
-        self.chats = {}
 
     def locked(self, event) -> bool:
         """
         Check if user has not reached the limit of messages set in config
         """
-        if event.object.message['peer_id'] >= 2000000000:
-            user_id = event.object.message['from_id']
-            chat_id = event.object.message['peer_id'] - 2000000000
-            if chat_id not in self.chats:
-                self.chats[chat_id] = {user_id: 1}
-                return not self.config['chats']['allow_unauthorized']
+        user_id = event.object.message['from_id']
+        if not user_id in self.users:
+            self.users[user_id] = 1
+            return not self.config['users']['allow_unauthorized']
 
-            if not user_id in chats[chat_id]:
-                self.chats[chat_id][user_id] = 1
-                return not self.config['chats']['allow_unauthorized']
+        authorized = 'authorized' if user_id in self.config['users']['authorized'] else 'unauthorized'
+        if self.users[user_id] >= self.config['users'][authorized]['limit']:
+            return True
 
-            authorized = 'authorized' if chat_id in self.config['chats']['authorized'] else 'unauthorized'
-            if self.chats[chat_id][user_id] >= self.config['chats'][authorized]['limit']:
-                return True
-
-            self.chats[chat_id][user_id] += 1
-            return False
-        else:
-            user_id = event.object.message['from_id']
-            if not user_id in self.users:
-                self.users[user_id] = 1
-                return not self.config['users']['allow_unauthorized']
-
-            authorized = 'authorized' if user_id in self.config['users']['authorized'] else 'unauthorized'
-            if self.users[user_id] >= self.config['users'][authorized]['limit']:
-                return True
-
-            self.users[user_id] += 1
-            return False
+        self.users[user_id] += 1
+        return False
 
     def upload(self, name: str, peer_id: int) -> str:
         """
@@ -97,33 +78,45 @@ class CatGirlBot():
 
         return '{filetype}{owner_id}_{file_id}'.format(filetype=filetype, owner_id=upload['owner_id'], file_id=upload['id'])
 
-    def send(self, peer_id: int, message_id: int, name: str) -> int:
+    def send(self, message: dict, name: str) -> int:
         """
         Reply to user with message
 
-        :param peer_id: peer ID of the user or chat to send message to
-        :param message_id: message ID to reply to
+        :param message: message dict from event object
 
         :return: message ID of the sent message
         """
+        peer_id = message['peer_id']
         attachment = self.upload(name=name, peer_id=peer_id)
         if not attachment:
-            message = self.config['messages']['upload_failed']
+            text = self.config['messages']['upload_failed']
         elif random() < self.config['messages']['success_chance']:
-            message = choice(self.config['messages']['success'])
+            text = choice(self.config['messages']['success'])
         else:
-            message = ''
+            text = ''
+
+        text = text.format(
+            name=name,
+            base_url=self.config["images"]["base_url"],
+            peer_id=peer_id,
+            message_id=message['id'])
+
+        # For some reasons in chat the field id in message dict is zero.
+        # Because of this bot can't reply to the message.
+        if peer_id > 2000000000:
+            text = f"[id{message['from_id']}|{choice(self.config['messages']['prefixes']) + text}]"
+            return self.vk.messages.send(
+                peer_id = peer_id,
+                random_id = get_random_id(),
+                attachment = self.upload(name, peer_id),
+                message=text)
 
         return self.vk.messages.send(
             peer_id = peer_id,
-            reply_to = message_id,
+            reply_to = message['id'],
             random_id = get_random_id(),
             attachment = self.upload(name, peer_id),
-            message=message.format(
-                name=name,
-                base_url=self.config["images"]["base_url"],
-                peer_id=peer_id,
-                message_id=message_id))
+            message=text)
 
     def process(self, event) -> bool:
         """
@@ -133,11 +126,12 @@ class CatGirlBot():
 
         :return: True if bot replied to the message, False otherwise
         """
+        print(event)
         for name, variants in self.config['images']['triggers'].items():
             text = event.object.message['text'].lower()
             if text in variants or text == '/' + name:
                 if not self.locked(event):
-                    self.send(event.object.message['peer_id'], event.object.message['id'], name)
+                    self.send(event.object.message, name)
 
     def start(self) -> None:
         while True:
@@ -146,7 +140,7 @@ class CatGirlBot():
                     if event.type == VkBotEventType.MESSAGE_NEW:
                         Thread(target=self.process, args=(event,)).start()
             except KeyboardInterrupt:
-                print("C-C signal received. T-T")
+                print("\rC-C signal received. T-T")
                 break
             except Exception as e:
                 print("Exception:", e)
